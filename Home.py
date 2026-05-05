@@ -78,6 +78,19 @@ SCANNERS = [
         "page": "4_India_Research",
         "status": "LIVE",
     },
+    {
+    "n": "05",
+    "title": "Liquid ETF Screener",
+    "tagline": "160 tickers · 21 categories",
+    "desc": "Capital rotation treemap across the most liquid global ETFs — equity, fixed income, commodities, thematic and geography.",
+    "metrics": [
+        ("Universe", "156", "ETFs", "neutral"),
+        ("Categories", "21", "curated", "neutral"),
+    ],
+    "tags": ["ETF", "Global", "Treemap", "Rotation"],
+    "page": "6_Liquid_ETF_Screener",
+    "status": "LIVE",
+},
 ]
 
 
