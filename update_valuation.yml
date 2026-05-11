@@ -1,0 +1,36 @@
+name: Update Valuation Tracker Data
+
+on:
+  schedule:
+    # Mon-Fri at 4:30 PM IST = 11:00 UTC (after NSE publishes ind_close_all)
+    - cron: '0 11 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy requests
+
+      - name: Run valuation update
+        run: python update_valuation.py
+
+      - name: Commit if data changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/valuation_history.json
+          git diff --staged --quiet || git commit -m "Daily valuation update $(date +'%Y-%m-%d')"
+          git push
