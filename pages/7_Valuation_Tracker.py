@@ -275,7 +275,7 @@ Valuation Tracker</div>""", unsafe_allow_html=True)
 
 view = st.sidebar.radio(
     "VIEW",
-    ["Single Index", "Cross-Index Heatmap", "Divergence Chart", "Sector Rotation", "Screener"],
+    ["Single Index", "Cross-Index Heatmap", "Divergence Chart", "QoQ Growth", "Sector Rotation", "Screener"],
     index=0,
 )
 
@@ -851,8 +851,211 @@ def render_divergence():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# VIEW 4 — Sector Rotation (quarterly heatmap, last 4 quarters)
+# VIEW 4 — QoQ Growth Heatmap (8 quarters, price / EPS / PE toggle)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def render_qoq_heatmap():
+    # ── Metric toggle ──
+    head_col, toggle_col = st.columns([3, 4])
+    with head_col:
+        st.markdown(f"""<div class='section-title'>
+            <span class='accent'>Heatmap</span> &nbsp; Quarter-on-Quarter Growth — All Sectors
+        </div>""", unsafe_allow_html=True)
+    with toggle_col:
+        st.markdown("<div style='margin-top:18px;'></div>", unsafe_allow_html=True)
+        metric = st.radio(
+            "Metric",
+            ["Price QoQ %", "EPS QoQ %", "P/E QoQ %"],
+            index=0, horizontal=True, label_visibility="collapsed",
+            key="qoq_metric",
+        )
+
+    metric_key = {"Price QoQ %": "close", "EPS QoQ %": "eps", "P/E QoQ %": "pe"}[metric]
+    metric_label = metric
+
+    st.markdown(f"""<div style='font-size:11px;color:{RH_TEXT};background:{RH_SURFACE};
+    border-left:3px solid {RH_GOLD};padding:12px 16px;margin-bottom:18px;line-height:1.6;'>
+    <b style='color:{RH_MAROON};'>How to read this:</b>
+    Each cell shows the <b>{metric_label}</b> for that quarter vs the previous quarter.
+    8 quarters shown — most recent on the right.
+    <br><br>
+    &nbsp;&nbsp;<b style='color:{RH_GREEN};'>Green</b> = grew vs prior quarter &nbsp;|&nbsp;
+    <b style='color:{RH_RED};'>Red</b> = shrank vs prior quarter &nbsp;|&nbsp;
+    White = roughly flat
+    <br><br>
+    Read across a row to see a sector's momentum story. Read down a column to compare
+    which sectors were hot or cold in the same quarter.
+    </div>""", unsafe_allow_html=True)
+
+    # ── Build the matrix ──
+    # Collect the last 9 quarterly snapshots per index (need 9 to compute 8 QoQ changes)
+    ALL_QUARTERS = set()
+    index_data = {}
+
+    for ix in INDICES:
+        snaps = data["indices"].get(ix["sheet_name"], {}).get("snapshots", [])
+        if not snaps:
+            continue
+        # Go back far enough to always get 8 complete quarters
+        quarterly = quarterly_snapshots(snaps, start_year=2020)
+        if len(quarterly) < 2:
+            continue
+
+        row = {}
+        for i in range(1, len(quarterly)):
+            prev, curr = quarterly[i-1], quarterly[i]
+            prev_val = prev.get(metric_key)
+            curr_val = curr.get(metric_key)
+            if prev_val and curr_val and prev_val > 0 and curr_val is not None:
+                pct_chg = (curr_val - prev_val) / abs(prev_val) * 100
+                dt = pd.Timestamp(curr["date"])
+                q = (dt.month - 1) // 3 + 1
+                label = f"{dt.year}-Q{q}"
+                row[label] = round(pct_chg, 1)
+                ALL_QUARTERS.add(label)
+
+        if row:
+            index_data[ix["display"]] = row
+
+    if not index_data:
+        st.warning("Not enough quarterly data yet. Run `reconstruct_valuation_history.py` to backfill.")
+        return
+
+    # Build DataFrame — sorted columns, last 8
+    all_q_sorted = sorted(ALL_QUARTERS)
+    if len(all_q_sorted) > 8:
+        all_q_sorted = all_q_sorted[-8:]
+
+    rows = []
+    for display_name, row in index_data.items():
+        r = {"Index": display_name}
+        for q in all_q_sorted:
+            r[q] = row.get(q, None)
+        # Only include if has data in at least half the quarters
+        non_null = sum(1 for q in all_q_sorted if r.get(q) is not None)
+        if non_null >= len(all_q_sorted) // 2:
+            rows.append(r)
+
+    if not rows:
+        st.warning("No data.")
+        return
+
+    df = pd.DataFrame(rows).set_index("Index")
+    df = df[all_q_sorted]
+
+    # Sort rows by latest-quarter value descending so hottest sectors are at top
+    latest_q = all_q_sorted[-1]
+    df = df.sort_values(latest_q, ascending=False, na_position="last")
+
+    z = df.values.tolist()
+    text = [[f"{v:+.1f}%" if v is not None and not (isinstance(v, float) and pd.isna(v)) else ""
+             for v in row] for row in z]
+
+    # Dynamic height — taller rows for readability
+    row_height = 28
+    chart_height = max(550, row_height * len(df) + 100)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z,
+        x=list(df.columns),
+        y=list(df.index),
+        text=text,
+        texttemplate="%{text}",
+        textfont={"family": "IBM Plex Mono", "size": 9, "color": "white"},
+        colorscale=[
+            [0.0,  RH_RED],
+            [0.4,  "#E78878"],
+            [0.5,  "#FFFFFF"],
+            [0.6,  "#7FB97F"],
+            [1.0,  RH_GREEN],
+        ],
+        zmid=0,
+        hovertemplate="<b>%{y}</b><br>%{x}<br>" + metric_label + ": %{z:+.1f}%<extra></extra>",
+        colorbar=dict(
+            title=dict(text=metric_label, font=dict(family="IBM Plex Mono", size=9, color=RH_MUTED)),
+            tickfont=dict(color=RH_MUTED, family="IBM Plex Mono", size=9),
+            thickness=12, len=0.8,
+        ),
+    ))
+    fig.update_layout(
+        plot_bgcolor=RH_BG,
+        paper_bgcolor=RH_SURFACE2,
+        font=dict(family="IBM Plex Mono", color=RH_MUTED, size=9),
+        height=chart_height,
+        margin=dict(l=160, r=60, t=30, b=60),
+        xaxis=dict(
+            side="top",
+            tickfont=dict(family="IBM Plex Mono", size=10, color=RH_TEXT),
+            tickangle=0,
+        ),
+        yaxis=dict(
+            tickfont=dict(family="IBM Plex Mono", size=10, color=RH_TEXT),
+            autorange="reversed",
+        ),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Summary: best and worst this quarter ──
+    st.markdown(f"""<div class='section-title'>
+        <span class='accent'>Summary</span> &nbsp; {latest_q} — Best vs Worst ({metric_label})
+    </div>""", unsafe_allow_html=True)
+
+    latest_data = (
+        df[[latest_q]]
+        .dropna()
+        .reset_index()
+        .rename(columns={latest_q: "QoQ %", "Index": "Index"})
+        .sort_values("QoQ %", ascending=False)
+    )
+
+    best_col, worst_col = st.columns(2)
+    with best_col:
+        st.markdown(f"<div style='font-size:11px;font-family:IBM Plex Mono,monospace;"
+                    f"color:{RH_GREEN};margin-bottom:8px;'><b>↑ Top 5 this quarter</b></div>",
+                    unsafe_allow_html=True)
+        html = "<table class='val-table'><thead><tr><th>Index</th><th>QoQ %</th></tr></thead><tbody>"
+        for _, r in latest_data.head(5).iterrows():
+            html += (f"<tr><td>{r['Index']}</td>"
+                     f"<td><span class='green'>{r['QoQ %']:+.1f}%</span></td></tr>")
+        html += "</tbody></table>"
+        st.markdown(html, unsafe_allow_html=True)
+
+    with worst_col:
+        st.markdown(f"<div style='font-size:11px;font-family:IBM Plex Mono,monospace;"
+                    f"color:{RH_RED};margin-bottom:8px;'><b>↓ Bottom 5 this quarter</b></div>",
+                    unsafe_allow_html=True)
+        html = "<table class='val-table'><thead><tr><th>Index</th><th>QoQ %</th></tr></thead><tbody>"
+        for _, r in latest_data.tail(5).iloc[::-1].iterrows():
+            html += (f"<tr><td>{r['Index']}</td>"
+                     f"<td><span class='red'>{r['QoQ %']:+.1f}%</span></td></tr>")
+        html += "</tbody></table>"
+        st.markdown(html, unsafe_allow_html=True)
+
+    # ── Trend table: show all 8 quarters side by side ──
+    st.markdown(f"""<div class='section-title'>
+        <span class='accent'>Table</span> &nbsp; Full 8-Quarter Grid ({metric_label})
+    </div>""", unsafe_allow_html=True)
+
+    html = "<table class='val-table'><thead><tr><th>Index</th>"
+    for q in all_q_sorted:
+        html += f"<th>{q}</th>"
+    html += "</tr></thead><tbody>"
+    for idx_name, row in df.iterrows():
+        html += f"<tr><td>{idx_name}</td>"
+        for q in all_q_sorted:
+            v = row.get(q)
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                html += "<td><span class='muted'>—</span></td>"
+            else:
+                cls = "green" if v > 0 else "red"
+                html += f"<td><span class='{cls}'>{v:+.1f}%</span></td>"
+        html += "</tr>"
+    html += "</tbody></table>"
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VIEW 5 — Sector Rotation (quarterly heatmap, last 4 quarters)
 
 def render_sector_rotation():
     st.markdown(f"""<div class='section-title'>
@@ -1239,6 +1442,8 @@ elif view == "Cross-Index Heatmap":
     render_heatmap()
 elif view == "Divergence Chart":
     render_divergence()
+elif view == "QoQ Growth":
+    render_qoq_heatmap()
 elif view == "Sector Rotation":
     render_sector_rotation()
 elif view == "Screener":
