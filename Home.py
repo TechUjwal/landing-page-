@@ -92,7 +92,19 @@ SCANNERS = [
     "status": "LIVE",
 },
 ]
-
+{
+        "n": "06",
+        "title": "Valuation Tracker",
+        "tagline": "Price vs EPS · 25 indices",
+        "desc": "Tracks cumulative price CAGR vs EPS CAGR across all major NSE indices + Nasdaq 100. Flags where price has re-rated faster than earnings (overvalued) or de-rated against fundamentals (undervalued).",
+        "metrics": [
+            ("Indices", "25", "tracked", "neutral"),
+            ("Updates", "Daily", "4:30 PM IST", "neutral"),
+        ],
+        "tags": ["Valuation", "Macro", "Sector"],
+        "page": "6_Valuation_Tracker",
+        "status": "LIVE",
+    },
 
 # ─────────────────────────────────────────────────────
 #  TILE STYLES — refined card design
