@@ -140,36 +140,24 @@ plot_df['FII_SMA'] = plot_df['FII_NET_PURCHASE_SALES'].rolling(window=sma_window
 plot_df['DII_SMA'] = plot_df['DII_NET_PURCHASE_SALES'].rolling(window=sma_window, min_periods=1).mean()
 plot_df['TOTAL_SMA'] = plot_df['TOTAL_NET'].rolling(window=sma_window, min_periods=1).mean()
 
-roll_win = 60 if view_mode == "Daily" else 12
-fii_mean = plot_df['FII_NET_PURCHASE_SALES'].rolling(window=roll_win, min_periods=5).mean()
-fii_std  = plot_df['FII_NET_PURCHASE_SALES'].rolling(window=roll_win, min_periods=5).std()
-plot_df['FII_Z_SCORE'] = (plot_df['FII_NET_PURCHASE_SALES'] - fii_mean) / fii_std.replace(0, np.nan)
-plot_df['ABSORPTION_RATIO'] = np.where(
-    plot_df['FII_NET_PURCHASE_SALES'] < 0,
-    abs(plot_df['DII_NET_PURCHASE_SALES'] / plot_df['FII_NET_PURCHASE_SALES'].replace(0, np.nan)),
-    np.nan
-)
+
+
 
 # --- KPI ROW ---
 latest = plot_df.iloc[-1]
-fii_val   = latest['FII_NET_PURCHASE_SALES']
-dii_val   = latest['DII_NET_PURCHASE_SALES']
-tot_val   = latest['TOTAL_NET']
-fii_z     = latest['FII_Z_SCORE']
-fii_30    = plot_df.tail(30)['FII_NET_PURCHASE_SALES'].sum() if view_mode == "Daily" else plot_df.tail(3)['FII_NET_PURCHASE_SALES'].sum()
+fii_val = latest['FII_NET_PURCHASE_SALES']
+dii_val = latest['DII_NET_PURCHASE_SALES']
+tot_val = latest['TOTAL_NET']
+n       = 30 if view_mode == "Daily" else 3
+fii_cum = plot_df.tail(n)['FII_NET_PURCHASE_SALES'].sum()
+dii_cum = plot_df.tail(n)['DII_NET_PURCHASE_SALES'].sum()
+period_lbl = "30D" if view_mode == "Daily" else "3M"
 
 def fmt_cr(v):
     if pd.isna(v): return "—"
     sign = "+" if v > 0 else ""
     col  = RH_GREEN if v > 0 else RH_RED
     return f'<span style="color:{col}">{sign}₹{v:,.0f} Cr</span>'
-
-def fmt_z(v):
-    if pd.isna(v): return "—"
-    col = RH_GREEN if v > 0 else RH_RED
-    return f'<span style="color:{col}">{v:+.2f}σ</span>'
-
-period_lbl = "30D FII" if view_mode == "Daily" else "3M FII"
 
 st.markdown(f"""
 <div class="kpi-row">
@@ -186,12 +174,12 @@ st.markdown(f"""
         <div class="kpi-lbl">Combined Net · Latest</div>
     </div>
     <div class="kpi">
-        <div class="kpi-val">{fmt_z(fii_z)}</div>
-        <div class="kpi-lbl">FII Z-Score</div>
+        <div class="kpi-val">{fmt_cr(fii_cum)}</div>
+        <div class="kpi-lbl">FII · {period_lbl} Cumulative</div>
     </div>
     <div class="kpi">
-        <div class="kpi-val">{fmt_cr(fii_30)}</div>
-        <div class="kpi-lbl">{period_lbl} Cumulative</div>
+        <div class="kpi-val">{fmt_cr(dii_cum)}</div>
+        <div class="kpi-lbl">DII · {period_lbl} Cumulative</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -262,95 +250,28 @@ def bar_with_avg(df, y_col, sma_col, title, pos_color, neg_color, avg_color):
     )
     return fig
 
-# --- TABS ---
-tab1, tab2 = st.tabs(["📉 Trend & Averages", "⚡ Statistical Extremes"])
-
-with tab1:
-    st.markdown(
-        f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.7rem;"
-        f"color:{RH_GOLD_DIM};margin:8px 0 16px;letter-spacing:0.14em;text-transform:uppercase;'>"
-        f"<span style='color:{RH_GOLD_LIGHT};font-weight:500;'>▶</span>"
-        f"&nbsp;&nbsp;FII / DII / Combined — {view_mode} view</div>",
-        unsafe_allow_html=True
-    )
-    st.plotly_chart(
-        bar_with_avg(fdf, 'FII_NET_PURCHASE_SALES', 'FII_SMA',
-                     'FII Net Flow', '#2E7D32', '#C0392B', RH_MAROON),
-        use_container_width=True
-    )
-    st.plotly_chart(
-        bar_with_avg(fdf, 'DII_NET_PURCHASE_SALES', 'DII_SMA',
-                     'DII Net Flow', RH_GOLD, '#C0392B', RH_MAROON_DK),
-        use_container_width=True
-    )
-    st.plotly_chart(
-        bar_with_avg(fdf, 'TOTAL_NET', 'TOTAL_SMA',
-                     'Combined Net Flow', '#2E7D32', '#C0392B', RH_GOLD_DIM),
-        use_container_width=True
-    )
-
-with tab2:
-    if len(fdf) > 1:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown(
-                f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.7rem;"
-                f"color:{RH_GOLD_DIM};margin:8px 0 14px;letter-spacing:0.14em;'>"
-                f"<span style='color:{RH_GOLD_LIGHT};'>▶</span>&nbsp;FII Z-Score (Deviation from {roll_win}-period mean)</div>",
-                unsafe_allow_html=True
-            )
-            z_colors = [RH_GREEN if v >= 0 else RH_RED for v in fdf['FII_Z_SCORE'].fillna(0)]
-            fig_z = go.Figure()
-            fig_z.add_trace(go.Bar(
-                x=fdf['DISPLAY_DATE'], y=fdf['FII_Z_SCORE'],
-                marker_color=z_colors, opacity=0.8,
-                hovertemplate="%{x}<br>Z: %{y:.2f}σ<extra></extra>"
-            ))
-            fig_z.add_hline(y=2, line_dash="dot", line_color=RH_RED, annotation_text="2σ", annotation_font_color=RH_RED)
-            fig_z.add_hline(y=-2, line_dash="dot", line_color=RH_GREEN, annotation_text="-2σ", annotation_font_color=RH_GREEN)
-            fig_z.update_layout(
-                plot_bgcolor=RH_BG, paper_bgcolor=RH_SURFACE2,
-                font=dict(family="IBM Plex Mono", color=RH_MUTED, size=10),
-                hovermode="x unified", height=340,
-                margin=dict(l=10, r=10, t=20, b=10),
-                xaxis=dict(type='category', nticks=12, gridcolor='rgba(139,26,26,0.08)'),
-                yaxis=dict(gridcolor='rgba(139,26,26,0.08)', zeroline=True,
-                           zerolinecolor=RH_MAROON, zerolinewidth=1)
-            )
-            st.plotly_chart(fig_z, use_container_width=True)
-
-        with c2:
-            st.markdown(
-                f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.7rem;"
-                f"color:{RH_GOLD_DIM};margin:8px 0 14px;letter-spacing:0.14em;'>"
-                f"<span style='color:{RH_GOLD_LIGHT};'>▶</span>&nbsp;DII Absorption Ratio (on FII sell days)</div>",
-                unsafe_allow_html=True
-            )
-            sell_days = fdf[fdf['FII_NET_PURCHASE_SALES'] < 0].copy()
-            if not sell_days.empty:
-                dot_colors = [RH_GREEN if v >= 1 else RH_MUTED for v in sell_days['ABSORPTION_RATIO'].fillna(0)]
-                fig_abs = go.Figure()
-                fig_abs.add_trace(go.Scatter(
-                    x=sell_days['DISPLAY_DATE'], y=sell_days['ABSORPTION_RATIO'],
-                    mode='markers',
-                    marker=dict(size=10, color=dot_colors, line=dict(width=1, color=RH_MAROON)),
-                    hovertemplate="%{x}<br>Ratio: %{y:.2f}x<extra></extra>"
-                ))
-                fig_abs.add_hline(y=1, line_dash="dot", line_color=RH_MAROON,
-                                  annotation_text="Full absorption", annotation_font_color=RH_MUTED)
-                fig_abs.update_layout(
-                    plot_bgcolor=RH_BG, paper_bgcolor=RH_SURFACE2,
-                    font=dict(family="IBM Plex Mono", color=RH_MUTED, size=10),
-                    hovermode="x unified", height=340,
-                    margin=dict(l=10, r=10, t=20, b=10),
-                    yaxis=dict(range=[0, 3.2], gridcolor='rgba(139,26,26,0.08)'),
-                    xaxis=dict(type='category', nticks=12, gridcolor='rgba(139,26,26,0.08)')
-                )
-                st.plotly_chart(fig_abs, use_container_width=True)
-            else:
-                st.info("No net FII sell days in current selection.")
-    else:
-        st.info("Not enough data points for statistical extremes in current selection.")
+st.markdown(
+    f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.7rem;"
+    f"color:{RH_GOLD_DIM};margin:8px 0 16px;letter-spacing:0.14em;text-transform:uppercase;'>"
+    f"<span style='color:{RH_GOLD_LIGHT};font-weight:500;'>▶</span>"
+    f"&nbsp;&nbsp;FII / DII / Combined — {view_mode} view</div>",
+    unsafe_allow_html=True
+)
+st.plotly_chart(
+    bar_with_avg(fdf, 'FII_NET_PURCHASE_SALES', 'FII_SMA',
+                 'FII Net Flow', '#2E7D32', '#C0392B', RH_MAROON),
+    use_container_width=True
+)
+st.plotly_chart(
+    bar_with_avg(fdf, 'DII_NET_PURCHASE_SALES', 'DII_SMA',
+                 'DII Net Flow', RH_GOLD, '#C0392B', RH_MAROON_DK),
+    use_container_width=True
+)
+st.plotly_chart(
+    bar_with_avg(fdf, 'TOTAL_NET', 'TOTAL_SMA',
+                 'Combined Net Flow', '#2E7D32', '#C0392B', RH_GOLD_DIM),
+    use_container_width=True
+)
 
 # --- DATA TABLE (expander) ---
 with st.expander("📋 Raw Data Table", expanded=False):
