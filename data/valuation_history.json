@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "last_updated": "2026-05-27T14:21:51.446876",
+  "last_updated": "2026-05-28T14:30:27.809562",
   "indices": {
     "NIFTY 50": {
       "snapshots": [
@@ -13791,11 +13791,11 @@
         },
         {
           "date": "2026-05-27",
-          "close": 29914.81,
+          "close": 30076.8,
           "pe": null,
           "pb": null,
           "eps": null,
-          "rsi": 73.49,
+          "rsi": 75.49,
           "source": "yf_only"
         }
       ]
