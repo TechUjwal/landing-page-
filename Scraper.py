@@ -1,112 +1,131 @@
-from playwright.sync_api import sync_playwright
+"""
+scraper.py — Daily FII/DII data fetcher using NSE API (no browser required).
+Runs via GitHub Actions cron. Fetches last 7 days and merges into CSV.
+"""
+
+import requests
 import pandas as pd
-import os
+from datetime import date, timedelta
+from pathlib import Path
+import time
+import sys
 
-def main():
-    new_data = []
-    with sync_playwright() as p:
-        # Use a standard Chrome User-Agent to prevent bot-blocking
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
-        page = context.new_page()
+CSV_PATH = Path("data/fii_dii_checkpoint.csv")
 
-        print("Navigating to Trendlyne...")
-        page.goto('https://trendlyne.com/macro-data/fii-dii/month/cash-month/', timeout=60000)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Referer": "https://www.nseindia.com/",
+}
 
-        # 1. THE FIX: Wait for the table to actually render on the screen
+session = requests.Session()
+session.headers.update(HEADERS)
+
+def init_session():
+    """Hit NSE pages to get valid session cookies before API call."""
+    print("Initialising NSE session...")
+    try:
+        session.get("https://www.nseindia.com", timeout=20)
+        time.sleep(3)
+        session.get("https://www.nseindia.com/reports/fii-dii", timeout=20)
+        time.sleep(2)
+        print("Session ready.")
+    except Exception as e:
+        print(f"Warning: session init issue — {e}. Continuing anyway.")
+
+def fetch_fii_dii(from_date: date, to_date: date) -> list:
+    url = "https://www.nseindia.com/api/fiidiiTradeReact"
+    params = {
+        "startDate": from_date.strftime("%d-%m-%Y"),
+        "endDate":   to_date.strftime("%d-%m-%Y"),
+    }
+    print(f"Fetching {from_date} → {to_date} ...")
+    try:
+        resp = session.get(url, params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        print(f"  → {len(data) if isinstance(data, list) else 'unexpected format'} records")
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"  ✗ Fetch failed: {e}")
+        return []
+
+def parse_to_df(raw: list) -> pd.DataFrame:
+    """
+    NSE fiidiiTradeReact returns rows like:
+    {"date":"12-05-2026","category":"FII/FPI","buyValue":"...","sellValue":"...","netVal":"..."}
+    One row per category per date — we pivot to one row per date.
+    """
+    if not raw:
+        return pd.DataFrame()
+
+    rows = []
+    for item in raw:
         try:
-            print("Waiting for data table to load...")
-            page.wait_for_selector('table tbody tr td:first-child a', timeout=15000)
-        except Exception as e:
-            print("Error: The table did not load in time. Trendlyne might be blocking the GitHub server.")
-            page.screenshot(path="debug_error.png")
-            print("Saved screenshot to 'debug_error.png' to see what the bot is seeing.")
-            browser.close()
-            return
+            date_val = (item.get("date") or item.get("Date") or "").strip()
+            category = (item.get("category") or item.get("Category") or "").strip().upper()
+            net_raw  = str(item.get("netValue") or item.get("netVal") or item.get("net") or "0")
+            net      = float(net_raw.replace(",", ""))
+            rows.append({"DATE": date_val, "category": category, "net": net})
+        except Exception:
+            continue
 
-        # Gather month links
-        month_links = page.evaluate('''() => {
-            const rows = Array.from(document.querySelectorAll('table tbody tr td:first-child a'));
-            return rows.map(a => ({ text: a.innerText.trim(), href: a.href }));
-        }''')
+    if not rows:
+        return pd.DataFrame()
 
-        # Check if we got links
-        if not month_links:
-            print("Failed to extract links even after waiting.")
-            browser.close()
-            return
+    df = pd.DataFrame(rows)
+    fii = df[df['category'].str.contains("FII|FPI", na=False)][['DATE','net']].rename(columns={'net':'FII_Net_Purchase_Sales'})
+    dii = df[df['category'] == "DII"][['DATE','net']].rename(columns={'net':'DII_Net_Purchase_Sales'})
+    merged = pd.merge(fii, dii, on='DATE', how='outer')
+    merged['Total_Net'] = merged['FII_Net_Purchase_Sales'].fillna(0) + merged['DII_Net_Purchase_Sales'].fillna(0)
+    return merged
 
-        # 2. Only scrape the FIRST link (The Current Month)
-        latest_month = month_links[0]
-        print(f"Scraping latest month: {latest_month['text']}")
-        
-        page.goto(latest_month['href'], timeout=60000)
-
-        # Wait for the Cash Provisional tab to be ready
-        try:
-            page.wait_for_selector('text="Cash Provisional"', timeout=10000)
-            cash_tab = page.locator('text="Cash Provisional"').first
-            if cash_tab.is_visible():
-                cash_tab.click()
-                page.wait_for_timeout(2000) # Give it 2 seconds to switch tabs
-        except Exception as e:
-            print("Could not find or click the 'Cash Provisional' tab.")
-
-        # Extract data exactly matching your CSV headers
-        daily_data = page.evaluate('''() => {
-            const rows = Array.from(document.querySelectorAll('table tbody tr'));
-            return rows.map(row => {
-                const cols = Array.from(row.querySelectorAll('td'));
-                if (cols.length < 7) return null;
-                return {
-                    DATE: cols[0]?.innerText.trim(),
-                    FII_Net_Purchase_Sales: cols[3]?.innerText.trim(),
-                    DII_Net_Purchase_Sales: cols[4]?.innerText.trim()
-                };
-            }).filter(row => row && row.DATE && row.DATE !== 'Date');
-        }''')
-        
-        new_data.extend(daily_data)
-        browser.close()
-
-    if not new_data:
-        print("No data extracted from the current month's page.")
+def merge_and_save(df_new: pd.DataFrame):
+    if df_new.empty:
+        print("No new rows to save.")
         return
 
-    # 3. MERGE WITH YOUR EXISTING CSV
-    csv_file = 'fii_dii_checkpoint.csv'
-    df_new = pd.DataFrame(new_data)
-    
-    if os.path.exists(csv_file):
-        print("Found existing history. Merging new data...")
-        df_old = pd.read_csv(csv_file, encoding='utf-8-sig')
-        
-        # Combine old and new data
-        df_combined = pd.concat([df_new, df_old])
-        
-        # Standardize dates to find exact matches
-        df_combined['DATE_PARSED'] = pd.to_datetime(df_combined['DATE'], errors='coerce')
-        df_combined = df_combined.dropna(subset=['DATE_PARSED'])
-        
-        # Drop duplicates (keeps the freshly scraped data if dates overlap)
-        df_combined = df_combined.sort_values('DATE_PARSED', ascending=False).drop_duplicates(subset=['DATE_PARSED'], keep='first')
-        
-        # Recalculate Total_Net for the new rows
-        fii = pd.to_numeric(df_combined['FII_Net_Purchase_Sales'].astype(str).str.replace(',', ''), errors='coerce')
-        dii = pd.to_numeric(df_combined['DII_Net_Purchase_Sales'].astype(str).str.replace(',', ''), errors='coerce')
-        df_combined['Total_Net'] = fii + dii
+    CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-        # Clean up and save
-        df_combined = df_combined.drop(columns=['DATE_PARSED'])
-        df_combined.to_csv(csv_file, index=False, encoding='utf-8-sig')
-        print("Successfully merged and saved.")
+    if CSV_PATH.exists():
+        df_old = pd.read_csv(CSV_PATH, encoding='utf-8-sig')
+        df_combined = pd.concat([df_old, df_new], ignore_index=True)
     else:
-        print("CSV not found. Creating a new one...")
-        # For a brand new file, calculate the total net
-        df_new['Total_Net'] = pd.to_numeric(df_new['FII_Net_Purchase_Sales'].astype(str).str.replace(',', ''), errors='coerce') + pd.to_numeric(df_new['DII_Net_Purchase_Sales'].astype(str).str.replace(',', ''), errors='coerce')
-        df_new.to_csv(csv_file, index=False, encoding='utf-8-sig')
+        df_combined = df_new.copy()
+
+    df_combined['_D'] = pd.to_datetime(df_combined['DATE'], format='mixed', dayfirst=True, errors='coerce')
+    df_combined = df_combined.dropna(subset=['_D'])
+    df_combined = (
+        df_combined
+        .sort_values('_D', ascending=False)
+        .drop_duplicates(subset=['_D'], keep='first')
+        .drop(columns=['_D'])
+    )
+    df_combined.to_csv(CSV_PATH, index=False, encoding='utf-8-sig')
+    print(f"✓ Saved {len(df_combined)} total rows → {CSV_PATH}")
+
+def main():
+    init_session()
+
+    # Fetch last 10 calendar days (covers weekends + any lag)
+    to_date   = date.today()
+    from_date = to_date - timedelta(days=10)
+
+    raw    = fetch_fii_dii(from_date, to_date)
+    df_new = parse_to_df(raw)
+
+    if df_new.empty:
+        print("⚠ No data parsed from NSE response. Exiting without changes.")
+        sys.exit(0)
+
+    print(f"Parsed {len(df_new)} new trading days:")
+    print(df_new.to_string(index=False))
+
+    merge_and_save(df_new)
 
 if __name__ == "__main__":
     main()
