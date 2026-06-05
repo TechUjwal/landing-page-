@@ -8,6 +8,7 @@ from theme import (
     RH_GOLD, RH_GOLD_LIGHT, RH_GOLD_DIM, RH_RED, RH_GREEN,
     RH_BG, RH_SURFACE, RH_TEXT, RH_MUTED, RH_BORDER
 )
+from auth import require_login, render_logout_button
 
 st.set_page_config(
     page_title="Right Horizons | Scanner Hub",
@@ -16,6 +17,8 @@ st.set_page_config(
     page_icon="◆",
 )
 apply_theme()
+require_login()
+render_logout_button()
 render_header("Quantitative Scanner Suite · Hub")
 
 

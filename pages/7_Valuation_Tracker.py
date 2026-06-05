@@ -25,10 +25,13 @@ from theme import (
     RH_RED, RH_GREEN, RH_BG, RH_SURFACE, RH_SURFACE2, RH_TEXT, RH_MUTED, RH_BORDER
 )
 from index_config import INDICES, BY_SHEET
+from auth import require_login, render_logout_button
 
 st.set_page_config(layout="wide", page_title="RH | Valuation Tracker",
                    initial_sidebar_state="expanded")
 apply_theme()
+require_login()
+render_logout_button()
 render_header("Scanner 07 · Price vs EPS Growth")
 
 

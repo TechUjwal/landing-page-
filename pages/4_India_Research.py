@@ -17,10 +17,13 @@ from theme import (
     RH_GOLD, RH_GOLD_LIGHT, RH_GOLD_DIM, RH_RED, RH_GREEN,
     RH_BG, RH_SURFACE, RH_SURFACE2, RH_TEXT, RH_MUTED, RH_BORDER
 )
+from auth import require_login, render_logout_button
 
 st.set_page_config(layout="wide", page_title="RH | India Research",
                    initial_sidebar_state="expanded")
 apply_theme()
+require_login()
+render_logout_button()
 render_header("Scanner 04 · India Custom Research")
 
 # ─────────────────────────────────────────────────────
